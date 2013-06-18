@@ -1,0 +1,8 @@
+#!/bin/sh
+AUTOMYSQLBACKUP=/usr/local/bin/automysqlbackup
+if [ -x $AUTOMYSQLBACKUP ]; then
+    ionice -c3 nice -n 15 $AUTOMYSQLBACKUP /etc/automysqlbackup/automysqlbackup.conf
+else
+    echo "CRITICAL: $AUTOMYSQLBACKUP not found by cron.daily script."
+    exit 1
+fi
