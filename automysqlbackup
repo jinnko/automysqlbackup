@@ -24,8 +24,10 @@
 # (Detailed instructions below variables)
 #=====================================================================
 
-if [ -f /etc/default/automysqlbackup ] ; then
+if [[ -z $1 && -f /etc/default/automysqlbackup ]]; then
 	. /etc/default/automysqlbackup
+elif [ -r $1 ]; then
+    . $1
 else
 
 # Username to access the MySQL server e.g. dbuser
@@ -417,10 +419,17 @@ exec 2> $LOGERR     # stderr replaced with file $LOGERR.
 
 # Functions
 
-# Database dump function
-dbdump () {
-	touch $2
-	chmod 600 $2
+# Determine the suffix
+SUFFIX=""
+if [ "$COMP" = "gzip" ]; then
+	SUFFIX=".gz"
+elif [ "$COMP" = "bzip2" ]; then
+	SUFFIX=".bz2"
+fi
+SUFFIX="${SUFFIX}.aes-256-cbc"
+
+# Database dump, compress & encrypt function
+dbdump_compress_encrypt () {
 	if [ $1 = "information_schema" ] ; then
 		NEWOPT="--skip-opt ${OPT}"
 	else
@@ -428,35 +437,18 @@ dbdump () {
 	fi
 
 	if [ -z "${USERNAME}" -o -z "${PASSWORD}" ] ; then
-		mysqldump --defaults-file=/etc/mysql/debian.cnf $NEWOPT $1 > $2
+		mysqldump --defaults-file=/etc/mysql/debian.cnf $NEWOPT $1 | $COMP | openssl enc -aes-256-cbc -kfile /etc/automysqlbackup/encryption_secret -out ${2}.gz.aes-256-cbc
 	else
-		mysqldump --user=$USERNAME --password=$PASSWORD --host=$DBHOST $NEWOPT $1 > $2
+		mysqldump --user=$USERNAME --password=$PASSWORD --host=$DBHOST $NEWOPT $1 | $COMP | openssl enc -aes-256-cbc -kfile /etc/automysqlbackup/encryption_secret -out ${2}.gz.aes-256-cbc
 	fi
+
+	chmod 600 ${2}$SUFFIX
+
+    if [ "$LATEST" = "yes" ]; then
+        cp $1$SUFFIX "$BACKUPDIR/latest/"
+    fi	
 	return 0
 }
-
-# Compression function plus latest copy
-SUFFIX=""
-compression () {
-if [ "$COMP" = "gzip" ]; then
-	gzip -f "$1"
-	echo
-	echo Backup Information for "$1"
-	gzip -l "$1.gz"
-	SUFFIX=".gz"
-elif [ "$COMP" = "bzip2" ]; then
-	echo Compression information for "$1.bz2"
-	bzip2 -f -v $1 2>&1
-	SUFFIX=".bz2"
-else
-	echo "No compression option set, check advanced settings"
-fi
-if [ "$LATEST" = "yes" ]; then
-	cp $1$SUFFIX "$BACKUPDIR/latest/"
-fi	
-return 0
-}
-
 
 # Run command before we begin
 if [ "$PREBACKUP" ]
@@ -532,8 +524,7 @@ echo ======================================================================
 				mkdir -p "$BACKUPDIR/monthly/$MDB"
 			fi
 			echo Monthly Backup of $MDB...
-				dbdump "$MDB" "$BACKUPDIR/monthly/$MDB/${MDB}_$DATE.$M.$MDB.sql"
-				compression "$BACKUPDIR/monthly/$MDB/${MDB}_$DATE.$M.$MDB.sql"
+				dbdump_compress_encrypt "$MDB" "$BACKUPDIR/monthly/$MDB/${MDB}_$DATE.$M.$MDB.sql"
 				BACKUPFILES="$BACKUPFILES $BACKUPDIR/monthly/$MDB/${MDB}_$DATE.$M.$MDB.sql$SUFFIX"
 			echo ----------------------------------------------------------------------
 		done
@@ -568,8 +559,7 @@ echo ======================================================================
 			fi
 		rm -fv "$BACKUPDIR/weekly/$DB/${DB}_week.$REMW".*
 		echo
-			dbdump "$DB" "$BACKUPDIR/weekly/$DB/${DB}_week.$W.$DATE.sql"
-			compression "$BACKUPDIR/weekly/$DB/${DB}_week.$W.$DATE.sql"
+			dbdump_compress_encrypt "$DB" "$BACKUPDIR/weekly/$DB/${DB}_week.$W.$DATE.sql"
 			BACKUPFILES="$BACKUPFILES $BACKUPDIR/weekly/$DB/${DB}_week.$W.$DATE.sql$SUFFIX"
 		echo ----------------------------------------------------------------------
 	
@@ -579,8 +569,7 @@ echo ======================================================================
 		echo Rotating last weeks Backup...
 		rm -fv "$BACKUPDIR/daily/$DB"/*."$DOW".sql.*
 		echo
-			dbdump "$DB" "$BACKUPDIR/daily/$DB/${DB}_$DATE.$DOW.sql"
-			compression "$BACKUPDIR/daily/$DB/${DB}_$DATE.$DOW.sql"
+			dbdump_compress_encrypt "$DB" "$BACKUPDIR/daily/$DB/${DB}_$DATE.$DOW.sql"
 			BACKUPFILES="$BACKUPFILES $BACKUPDIR/daily/$DB/${DB}_$DATE.$DOW.sql$SUFFIX"
 		echo ----------------------------------------------------------------------
 	fi
@@ -595,8 +584,7 @@ echo ======================================================================
 	# Monthly Full Backup of all Databases
 	if [ "$DOM" = "01" ]; then
 		echo Monthly full Backup of \( $MDBNAMES \)...
-			dbdump "$MDBNAMES" "$BACKUPDIR/monthly/$DATE.$M.all-databases.sql"
-			compression "$BACKUPDIR/monthly/$DATE.$M.all-databases.sql"
+			dbdump_compress_encrypt "$MDBNAMES" "$BACKUPDIR/monthly/$DATE.$M.all-databases.sql"
 			BACKUPFILES="$BACKUPFILES $BACKUPDIR/monthly/$DATE.$M.all-databases.sql$SUFFIX"
 		echo ----------------------------------------------------------------------
 	fi
@@ -615,8 +603,7 @@ echo ======================================================================
 			fi
 		rm -fv "$BACKUPDIR/weekly/week.$REMW".*
 		echo
-			dbdump "$DBNAMES" "$BACKUPDIR/weekly/week.$W.$DATE.sql"
-			compression "$BACKUPDIR/weekly/week.$W.$DATE.sql"
+			dbdump_compress_encrypt "$DBNAMES" "$BACKUPDIR/weekly/week.$W.$DATE.sql"
 			BACKUPFILES="$BACKUPFILES $BACKUPDIR/weekly/week.$W.$DATE.sql$SUFFIX"
 		echo ----------------------------------------------------------------------
 		
@@ -627,8 +614,7 @@ echo ======================================================================
 		echo Rotating last weeks Backup...
 		rm -fv "$BACKUPDIR"/daily/*."$DOW.sql".*
 		echo
-			dbdump "$DBNAMES" "$BACKUPDIR/daily/$DATE.$DOW.sql"
-			compression "$BACKUPDIR/daily/$DATE.$DOW.sql"
+			dbdump_compress_encrypt "$DBNAMES" "$BACKUPDIR/daily/$DATE.$DOW.sql"
 			BACKUPFILES="$BACKUPFILES $BACKUPDIR/daily/$DATE.$DOW.sql$SUFFIX"
 		echo ----------------------------------------------------------------------
 	fi
